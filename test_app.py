@@ -1,6 +1,6 @@
 import unittest
 
-from app import format_lead, parse_lead
+from app import format_lead, message_to_html, parse_lead
 
 
 class ParseLeadTests(unittest.TestCase):
@@ -42,6 +42,10 @@ class ParseLeadTests(unittest.TestCase):
 
     def test_formats_lead_with_counter(self):
         self.assertEqual(format_lead("+79990000000", 4), "Телефон: +79990000000\nЛид №4")
+
+    def test_preserves_bold_formatting_from_bot_message(self):
+        message = {"text": "Добрый день, тест", "entities": [{"type": "bold", "offset": 13, "length": 4}]}
+        self.assertEqual(message_to_html(message), "Добрый день, <b>тест</b>")
 
 
 if __name__ == "__main__":
