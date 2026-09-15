@@ -110,7 +110,9 @@ def telegram_request(method: str, payload: dict[str, Any]) -> None:
 
 
 def format_lead(phone: str, number: int) -> str:
-    return f"Телефон: <code>{phone}</code>\nЛид №{number}"
+    # Keep the phone as plain text: Telegram then turns a registered number
+    # into a native profile/contact link in the client.
+    return f"Телефон: {phone}\nЛид №{number}"
 
 
 def deliver_pending() -> int:

@@ -41,7 +41,7 @@ class ParseLeadTests(unittest.TestCase):
         self.assertEqual(lead.audio_url, "https://zvonok.com/record_cdr/example/")
 
     def test_formats_lead_with_counter(self):
-        self.assertEqual(format_lead("+79990000000", 4), "Телефон: <code>+79990000000</code>\nЛид №4")
+        self.assertEqual(format_lead("+79990000000", 4), "Телефон: +79990000000\nЛид №4")
 
 
 if __name__ == "__main__":
