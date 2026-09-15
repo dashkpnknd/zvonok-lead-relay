@@ -343,12 +343,17 @@ def route_to_no_tg(event_id: str, phone: str, audio_url: str | None, reason: str
     return True
 
 
-def format_report(event_id: str, status: str) -> str:
+def format_report(number: int, phone: str, event_id: str, status: str) -> str:
     result = {
         "sent": "Отправлено",
         "routed_no_tg": "Не отправлено → второй чат",
     }[status]
-    return f"ID: <code>{html.escape(event_id)}</code>\n{result}"
+    return (
+        f"Лид №{number}\n"
+        f"Телефон: {html.escape(phone)}\n"
+        f"Статус: {result}\n"
+        f"ID: <code>{html.escape(event_id)}</code>"
+    )
 
 
 def deliver_outreach_reports() -> int:
@@ -357,16 +362,18 @@ def deliver_outreach_reports() -> int:
         return 0
     with sqlite3.connect(DATABASE_PATH) as connection:
         rows = connection.execute(
-            """SELECT event_id, outreach_status FROM leads
+            """SELECT event_id, phone, outreach_status FROM leads
                WHERE outreach_status IN ('sent', 'routed_no_tg')
                  AND report_status IS NULL
                ORDER BY rowid"""
         ).fetchall()
     delivered = 0
-    for event_id, status in rows:
+    for event_id, phone, status in rows:
+        with sqlite3.connect(DATABASE_PATH) as connection:
+            number = lead_number(connection, event_id)
         telegram_request("sendMessage", {
             "chat_id": chat_id,
-            "text": format_report(event_id, status),
+            "text": format_report(number, phone, event_id, status),
             "parse_mode": "HTML",
         })
         with sqlite3.connect(DATABASE_PATH) as connection:

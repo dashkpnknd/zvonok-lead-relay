@@ -48,10 +48,13 @@ class ParseLeadTests(unittest.TestCase):
         self.assertEqual(message_to_html(message), "Добрый день, <b>тест</b>")
 
     def test_formats_short_outreach_report(self):
-        self.assertEqual(format_report("123", "sent"), "ID: <code>123</code>\nОтправлено")
         self.assertEqual(
-            format_report("123", "routed_no_tg"),
-            "ID: <code>123</code>\nНе отправлено → второй чат",
+            format_report(4, "+79990000000", "123", "sent"),
+            "Лид №4\nТелефон: +79990000000\nСтатус: Отправлено\nID: <code>123</code>",
+        )
+        self.assertEqual(
+            format_report(4, "+79990000000", "123", "routed_no_tg"),
+            "Лид №4\nТелефон: +79990000000\nСтатус: Не отправлено → второй чат\nID: <code>123</code>",
         )
 
 
