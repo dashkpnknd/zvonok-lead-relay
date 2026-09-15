@@ -29,6 +29,7 @@ PORT = int(os.environ.get("PORT", "8080"))
 DELIVERY_INTERVAL_SECONDS = int(os.environ.get("DELIVERY_INTERVAL_SECONDS", "900"))
 OUTREACH_FIRST_DELAY_RANGE = (60, 180)
 OUTREACH_BETWEEN_DELAY_RANGE = (1500, 2100)
+OUTREACH_RETRY_DELAY_SECONDS = 1800
 OUTREACH_POLL_SECONDS = 15
 SESSION_PATH = os.environ.get("TELEGRAM_SESSION_PATH", "/data/outreach.session")
 USER_API_ID = os.environ.get("TELEGRAM_API_ID")
@@ -457,7 +458,7 @@ def outreach_loop() -> None:
                 with sqlite3.connect(DATABASE_PATH) as connection:
                     connection.execute(
                         "UPDATE leads SET outreach_status = 'pending', outreach_due_at = ? WHERE event_id = ?",
-                        (time.time() + 300, row[0]),
+                        (time.time() + OUTREACH_RETRY_DELAY_SECONDS, row[0]),
                     )
         except Exception as error:
             print(f"outreach failed: {error}", flush=True)
