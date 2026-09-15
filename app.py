@@ -109,8 +109,8 @@ def telegram_request(method: str, payload: dict[str, Any]) -> None:
         raise RuntimeError(f"Telegram rejected {method}: {result}")
 
 
-def format_lead(phone: str) -> str:
-    return f"Телефон: <code>{phone}</code>"
+def format_lead(phone: str, number: int) -> str:
+    return f"Телефон: <code>{phone}</code>\nЛид №{number}"
 
 
 def deliver_pending() -> int:
@@ -124,9 +124,17 @@ def deliver_pending() -> int:
         ).fetchall()
 
         for event_id, phone, audio_url in rows:
+            lead_number = connection.execute(
+                """
+                SELECT COUNT(*) FROM leads
+                WHERE event_id NOT LIKE 'relay-%'
+                  AND rowid <= (SELECT rowid FROM leads WHERE event_id = ?)
+                """,
+                (event_id,),
+            ).fetchone()[0]
             message: dict[str, Any] = {
                 "chat_id": CHAT_ID,
-                "text": format_lead(phone),
+                "text": format_lead(phone, lead_number),
                 "parse_mode": "HTML",
             }
             if audio_url:

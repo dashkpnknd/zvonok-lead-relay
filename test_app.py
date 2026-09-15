@@ -1,6 +1,6 @@
 import unittest
 
-from app import parse_lead
+from app import format_lead, parse_lead
 
 
 class ParseLeadTests(unittest.TestCase):
@@ -39,6 +39,9 @@ class ParseLeadTests(unittest.TestCase):
     def test_expands_relative_recording_url(self):
         lead = parse_lead({"phone": "+79990000000", "audio_url": "/record_cdr/example/"})
         self.assertEqual(lead.audio_url, "https://zvonok.com/record_cdr/example/")
+
+    def test_formats_lead_with_counter(self):
+        self.assertEqual(format_lead("+79990000000", 4), "Телефон: <code>+79990000000</code>\nЛид №4")
 
 
 if __name__ == "__main__":
