@@ -22,6 +22,20 @@ class ParseLeadTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             parse_lead({"call_id": "123"})
 
+    def test_parses_advanced_campaign_postback_fields(self):
+        lead = parse_lead(
+            {
+                "ct_phone": "+79990000000",
+                "ct_call_id": "42",
+                "ct_campaign_id": "99",
+                "ct_completed": "2026-09-15 10:00:00",
+                "ct_record_url": "https://example.test/record.wav",
+            }
+        )
+        self.assertEqual(lead.phone, "+79990000000")
+        self.assertEqual(lead.event_id, "42")
+        self.assertEqual(lead.campaign_id, "99")
+
 
 if __name__ == "__main__":
     unittest.main()

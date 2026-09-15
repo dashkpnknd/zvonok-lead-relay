@@ -61,19 +61,19 @@ def first_value(payload: dict[str, Any], *names: str) -> str | None:
 
 def parse_lead(payload: dict[str, Any]) -> Lead:
     """Normalise the fields shown in Zvonok lead notifications."""
-    phone = first_value(payload, "phone", "dst_phone", "client_phone")
+    phone = first_value(payload, "phone", "dst_phone", "client_phone", "ct_phone")
     if not phone:
         raise ValueError("Zvonok webhook has no phone number")
 
-    call_id = first_value(payload, "call_id", "ats_call_id", "call_uuid")
-    completed_at = first_value(payload, "completed_date", "completed_at", "call_start")
+    call_id = first_value(payload, "call_id", "ats_call_id", "call_uuid", "ct_call_id")
+    completed_at = first_value(payload, "completed_date", "completed_at", "call_start", "ct_completed")
     event_id = call_id or f"{phone}:{completed_at or json.dumps(payload, sort_keys=True)}"
 
     return Lead(
         event_id=event_id,
         phone=phone,
-        audio_url=first_value(payload, "recorded_audio_url", "audio_url"),
-        campaign_id=first_value(payload, "campaign_id", "ats_campaign_id"),
+        audio_url=first_value(payload, "recorded_audio_url", "audio_url", "ct_record_url"),
+        campaign_id=first_value(payload, "campaign_id", "ats_campaign_id", "ct_campaign_id"),
         completed_at=completed_at,
     )
 
@@ -106,7 +106,7 @@ def telegram_request(method: str, payload: dict[str, Any]) -> None:
 
 
 def format_lead(phone: str) -> str:
-    return f"🟢 <b>Новый лид из Zvonok</b>\nТелефон: <code>{phone}</code>"
+    return f"Телефон: <code>{phone}</code>"
 
 
 def deliver_pending() -> int:
@@ -158,14 +158,9 @@ class WebhookHandler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(b"ok\n")
             return
-        self.send_error(HTTPStatus.NOT_FOUND)
+        self._receive_get_webhook()
 
     def do_POST(self) -> None:
-        expected_path = f"/zvonok/{WEBHOOK_SECRET}"
-        if self.path != expected_path:
-            self.send_error(HTTPStatus.NOT_FOUND)
-            return
-
         length = int(self.headers.get("Content-Length", "0"))
         raw_body = self.rfile.read(length)
         content_type = self.headers.get("Content-Type", "")
@@ -175,13 +170,33 @@ class WebhookHandler(BaseHTTPRequestHandler):
             else:
                 query = urllib.parse.parse_qs(raw_body.decode("utf-8"), keep_blank_values=True)
                 payload = {key: values[-1] for key, values in query.items()}
-            if not isinstance(payload, dict):
-                raise ValueError("payload must be an object")
-            saved = save_lead(parse_lead(payload))
+            self._save_payload(payload)
         except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as error:
             self.send_error(HTTPStatus.BAD_REQUEST, str(error))
             return
 
+    def _receive_get_webhook(self) -> None:
+        parsed = urllib.parse.urlparse(self.path)
+        if parsed.path != f"/zvonok/{WEBHOOK_SECRET}":
+            self.send_error(HTTPStatus.NOT_FOUND)
+            return
+        query = urllib.parse.parse_qs(parsed.query, keep_blank_values=True)
+        try:
+            self._save_payload({key: values[-1] for key, values in query.items()})
+        except ValueError as error:
+            self.send_error(HTTPStatus.BAD_REQUEST, str(error))
+
+    def _save_payload(self, payload: dict[str, Any]) -> None:
+        if not isinstance(payload, dict):
+            raise ValueError("payload must be an object")
+        parsed = urllib.parse.urlparse(self.path)
+        if parsed.path != f"/zvonok/{WEBHOOK_SECRET}":
+            self.send_error(HTTPStatus.NOT_FOUND)
+            return
+
+        # Advanced campaigns notify about every answered call; a lead is only digit 1.
+        button = first_value(payload, "ct_button_num", "button_num")
+        saved = False if button not in (None, "1") else save_lead(parse_lead(payload))
         self.send_response(HTTPStatus.OK)
         self.send_header("Content-Type", "application/json")
         self.end_headers()
