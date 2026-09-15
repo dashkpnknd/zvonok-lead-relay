@@ -1,0 +1,19 @@
+services:
+  relay:
+    build: .
+    restart: unless-stopped
+    env_file: /etc/zvonok-lead-relay.env
+    volumes:
+      - relay-data:/data
+    environment:
+      DATABASE_PATH: /data/leads.sqlite3
+    networks:
+      - price-master
+
+volumes:
+  relay-data:
+
+networks:
+  price-master:
+    external: true
+    name: price-master_default

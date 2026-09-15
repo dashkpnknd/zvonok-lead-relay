@@ -29,7 +29,33 @@ python3 -m unittest -v
 python3 app.py
 ```
 
-## Server installation
+## Docker deployment
+
+The included `docker-compose.yml` joins the existing `price-master_default`
+network so that Caddy can reach the `relay` container. Add this route before
+Caddy's catch-all route:
+
+```caddy
+handle_path /zvonok-lead-relay/* {
+  reverse_proxy relay:8080
+}
+```
+
+With `WEBHOOK_SECRET=example`, the final URL is:
+
+```
+https://api.pricemasterapp.ru/zvonok-lead-relay/zvonok/example
+```
+
+Deploy it with:
+
+```sh
+git clone git@github.com:dashkpnknd/zvonok-lead-relay.git /opt/zvonok-lead-relay
+cd /opt/zvonok-lead-relay
+docker compose up -d --build
+```
+
+## systemd alternative
 
 ```sh
 sudo useradd --system --home /opt/zvonok-lead-relay --shell /usr/sbin/nologin zvonok
