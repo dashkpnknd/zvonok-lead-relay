@@ -139,7 +139,9 @@ def telegram_request(method: str, payload: dict[str, Any]) -> dict[str, Any]:
         headers={"Content-Type": "application/json"},
         method="POST",
     )
-    with urllib.request.urlopen(request, timeout=20) as response:
+    # getUpdates is long-polling for 20 seconds, so the HTTP client needs a
+    # slightly longer window than the Bot API request itself.
+    with urllib.request.urlopen(request, timeout=35) as response:
         result = json.load(response)
     if not result.get("ok"):
         raise RuntimeError(f"Telegram rejected {method}: {result}")
