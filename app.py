@@ -66,6 +66,8 @@ def init_database() -> None:
             connection.execute("ALTER TABLE leads ADD COLUMN outreach_status TEXT DEFAULT 'not_scheduled'")
         if "outreach_sent_at" not in columns:
             connection.execute("ALTER TABLE leads ADD COLUMN outreach_sent_at TEXT")
+        if "report_status" not in columns:
+            connection.execute("ALTER TABLE leads ADD COLUMN report_status TEXT")
         connection.execute(
             """CREATE TABLE IF NOT EXISTS settings (
                    key TEXT PRIMARY KEY, value TEXT NOT NULL)"""
@@ -250,6 +252,14 @@ def configure_from_bot_update(message: dict[str, Any]) -> None:
     chat_type = chat.get("type")
     chat_id = str(chat.get("id", ""))
     text = message.get("text", "")
+    if "ОТЧЕТ" in str(chat.get("title", "")).upper() and "ЛИД" in str(chat.get("title", "")).upper():
+        if get_setting("report_chat_id") != chat_id:
+            set_setting("report_chat_id", chat_id)
+            telegram_request("sendMessage", {
+                "chat_id": chat_id,
+                "text": "Журнал рассылки подключён.",
+            })
+        return
     if chat_type == "private":
         if text.startswith("/start"):
             telegram_request("sendMessage", {
@@ -273,6 +283,17 @@ def configure_from_bot_update(message: dict[str, Any]) -> None:
         })
 
 
+def configure_report_channel(chat: dict[str, Any]) -> None:
+    title = str(chat.get("title", "")).upper()
+    chat_id = str(chat.get("id", ""))
+    if chat_id and get_setting("report_chat_id") != chat_id and "ОТЧЕТ" in title and "ЛИД" in title:
+        set_setting("report_chat_id", chat_id)
+        telegram_request("sendMessage", {
+            "chat_id": chat_id,
+            "text": "Журнал рассылки подключён.",
+        })
+
+
 def bot_updates_loop() -> None:
     offset = int(get_setting("bot_update_offset") or "0")
     while True:
@@ -280,13 +301,18 @@ def bot_updates_loop() -> None:
             result = telegram_request("getUpdates", {
                 "offset": offset,
                 "timeout": 20,
-                "allowed_updates": ["message"],
+                "allowed_updates": ["message", "channel_post", "my_chat_member"],
             })
             for update in result.get("result", []):
                 offset = int(update["update_id"]) + 1
                 set_setting("bot_update_offset", str(offset))
                 if isinstance(update.get("message"), dict):
                     configure_from_bot_update(update["message"])
+                if isinstance(update.get("channel_post"), dict):
+                    configure_from_bot_update(update["channel_post"])
+                member_update = update.get("my_chat_member")
+                if isinstance(member_update, dict):
+                    configure_report_channel(member_update.get("chat", {}))
         except Exception as error:
             print(f"bot updates failed: {error}", flush=True)
             time.sleep(5)
@@ -315,6 +341,41 @@ def route_to_no_tg(event_id: str, phone: str, audio_url: str | None, reason: str
         message["reply_markup"] = {"inline_keyboard": [[{"text": "▶️ Запись звонка", "url": audio_url}]]}
     telegram_request("sendMessage", message)
     return True
+
+
+def format_report(event_id: str, status: str) -> str:
+    result = {
+        "sent": "Отправлено",
+        "routed_no_tg": "Не отправлено → второй чат",
+    }[status]
+    return f"ID: <code>{html.escape(event_id)}</code>\n{result}"
+
+
+def deliver_outreach_reports() -> int:
+    chat_id = get_setting("report_chat_id")
+    if not chat_id:
+        return 0
+    with sqlite3.connect(DATABASE_PATH) as connection:
+        rows = connection.execute(
+            """SELECT event_id, outreach_status FROM leads
+               WHERE outreach_status IN ('sent', 'routed_no_tg')
+                 AND report_status IS NULL
+               ORDER BY rowid"""
+        ).fetchall()
+    delivered = 0
+    for event_id, status in rows:
+        telegram_request("sendMessage", {
+            "chat_id": chat_id,
+            "text": format_report(event_id, status),
+            "parse_mode": "HTML",
+        })
+        with sqlite3.connect(DATABASE_PATH) as connection:
+            connection.execute(
+                "UPDATE leads SET report_status = ? WHERE event_id = ? AND report_status IS NULL",
+                (status, event_id),
+            )
+        delivered += 1
+    return delivered
 
 
 async def attempt_outreach(phone: str, template_html: str) -> tuple[str, str]:
@@ -355,6 +416,7 @@ async def attempt_outreach(phone: str, template_html: str) -> tuple[str, str]:
 def outreach_loop() -> None:
     while True:
         try:
+            deliver_outreach_reports()
             template = get_setting("outreach_template_html")
             next_allowed = float(get_setting("outreach_next_allowed_at") or "0")
             if not template or time.time() < next_allowed:

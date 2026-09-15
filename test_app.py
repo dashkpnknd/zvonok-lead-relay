@@ -1,6 +1,6 @@
 import unittest
 
-from app import format_lead, message_to_html, parse_lead
+from app import format_lead, format_report, message_to_html, parse_lead
 
 
 class ParseLeadTests(unittest.TestCase):
@@ -46,6 +46,13 @@ class ParseLeadTests(unittest.TestCase):
     def test_preserves_bold_formatting_from_bot_message(self):
         message = {"text": "Добрый день, тест", "entities": [{"type": "bold", "offset": 13, "length": 4}]}
         self.assertEqual(message_to_html(message), "Добрый день, <b>тест</b>")
+
+    def test_formats_short_outreach_report(self):
+        self.assertEqual(format_report("123", "sent"), "ID: <code>123</code>\nОтправлено")
+        self.assertEqual(
+            format_report("123", "routed_no_tg"),
+            "ID: <code>123</code>\nНе отправлено → второй чат",
+        )
 
 
 if __name__ == "__main__":
