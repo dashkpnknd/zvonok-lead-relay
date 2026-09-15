@@ -69,10 +69,14 @@ def parse_lead(payload: dict[str, Any]) -> Lead:
     completed_at = first_value(payload, "completed_date", "completed_at", "call_start", "ct_completed")
     event_id = call_id or f"{phone}:{completed_at or json.dumps(payload, sort_keys=True)}"
 
+    audio_url = first_value(payload, "recorded_audio_url", "audio_url", "ct_record_url")
+    if audio_url and audio_url.startswith("/"):
+        audio_url = f"https://zvonok.com{audio_url}"
+
     return Lead(
         event_id=event_id,
         phone=phone,
-        audio_url=first_value(payload, "recorded_audio_url", "audio_url", "ct_record_url"),
+        audio_url=audio_url,
         campaign_id=first_value(payload, "campaign_id", "ats_campaign_id", "ct_campaign_id"),
         completed_at=completed_at,
     )

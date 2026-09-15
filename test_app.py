@@ -36,6 +36,10 @@ class ParseLeadTests(unittest.TestCase):
         self.assertEqual(lead.event_id, "42")
         self.assertEqual(lead.campaign_id, "99")
 
+    def test_expands_relative_recording_url(self):
+        lead = parse_lead({"phone": "+79990000000", "audio_url": "/record_cdr/example/"})
+        self.assertEqual(lead.audio_url, "https://zvonok.com/record_cdr/example/")
+
 
 if __name__ == "__main__":
     unittest.main()
