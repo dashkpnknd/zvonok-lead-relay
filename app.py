@@ -363,7 +363,30 @@ def route_to_no_tg(event_id: str, phone: str, audio_url: str | None, reason: str
     return True
 
 
-def format_report(number: int, phone: str, event_id: str, status: str, reason: str | None) -> str:
+def queue_summary(connection: sqlite3.Connection) -> str:
+    """A compact, live estimate for the next outbound action."""
+    queued = connection.execute(
+        """SELECT COUNT(*) FROM leads
+           WHERE outreach_status IN ('pending', 'retry_pending')"""
+    ).fetchone()[0]
+    if not queued:
+        return "Очередь: нет"
+
+    next_row = connection.execute(
+        """SELECT event_id, outreach_due_at FROM leads
+           WHERE outreach_status IN ('pending', 'retry_pending')
+           ORDER BY rowid LIMIT 1"""
+    ).fetchone()
+    assert next_row is not None
+    next_allowed = float(get_setting("outreach_next_allowed_at") or "0")
+    ready_at = max(float(next_row[1] or 0), next_allowed)
+    minutes = max(0, int((ready_at - time.time() + 59) // 60))
+    return f"Далее: лид №{lead_number(connection, next_row[0])} — через ~{minutes} мин\nОчередь: {queued}"
+
+
+def format_report(
+    number: int, phone: str, event_id: str, status: str, reason: str | None, queue: str
+) -> str:
     result = {
         "sent": "Отправлено",
         "routed_no_tg": "Не отправлено → второй чат",
@@ -377,7 +400,7 @@ def format_report(number: int, phone: str, event_id: str, status: str, reason: s
     )
     if status == "retry_pending" and reason:
         report += f"\nПричина: {html.escape(reason)}"
-    return report
+    return f"{report}\n{queue}"
 
 
 def deliver_outreach_reports() -> int:
@@ -395,9 +418,10 @@ def deliver_outreach_reports() -> int:
     for event_id, phone, status, reason in rows:
         with sqlite3.connect(DATABASE_PATH) as connection:
             number = lead_number(connection, event_id)
+            queue = queue_summary(connection)
         telegram_request("sendMessage", {
             "chat_id": chat_id,
-            "text": format_report(number, phone, event_id, status, reason),
+            "text": format_report(number, phone, event_id, status, reason, queue),
             "parse_mode": "HTML",
         })
         with sqlite3.connect(DATABASE_PATH) as connection:
