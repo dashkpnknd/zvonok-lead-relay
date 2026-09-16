@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import asyncio
 import html
+import io
 import json
 import os
 import random
@@ -220,7 +221,8 @@ def utf16_index(text: str, offset: int) -> int:
 
 
 def message_to_html(message: dict[str, Any]) -> str | None:
-    text = message.get("text")
+    # Telegram uses ``caption`` and ``caption_entities`` for a photo's text.
+    text = message.get("text") or message.get("caption")
     if not isinstance(text, str) or not text.strip():
         return None
     tags = {
@@ -229,7 +231,8 @@ def message_to_html(message: dict[str, Any]) -> str | None:
         "code": ("<code>", "</code>"), "pre": ("<pre>", "</pre>"),
     }
     replacements: list[tuple[int, str]] = []
-    for entity in message.get("entities", []):
+    entities = message.get("entities") or message.get("caption_entities") or []
+    for entity in entities:
         entity_type = entity.get("type")
         if entity_type not in tags:
             continue
@@ -246,6 +249,15 @@ def message_to_html(message: dict[str, Any]) -> str | None:
         chunks.append(html.escape(character))
     chunks.extend(boundaries.get(len(text), []))
     return "".join(chunks)
+
+
+def photo_file_id(message: dict[str, Any]) -> str | None:
+    """Return the largest image attached to a Bot API message."""
+    photos = message.get("photo")
+    if not isinstance(photos, list) or not photos:
+        return None
+    largest = photos[-1]
+    return largest.get("file_id") if isinstance(largest, dict) else None
 
 
 def configure_from_bot_update(message: dict[str, Any]) -> None:
@@ -265,15 +277,20 @@ def configure_from_bot_update(message: dict[str, Any]) -> None:
         if text.startswith("/start"):
             telegram_request("sendMessage", {
                 "chat_id": chat_id,
-                "text": "Пришлите текст первого сообщения клиенту. Форматирование (жирный, курсив) сохраню.",
+                "text": "Пришлите первое сообщение клиенту: текст или фото с подписью. Форматирование сохраню.",
             })
             return
         template = message_to_html(message)
         if template:
             set_setting("outreach_template_html", template)
+            photo_id = photo_file_id(message)
+            if photo_id:
+                set_setting("outreach_template_photo_file_id", photo_id)
+            else:
+                set_setting("outreach_template_photo_file_id", "")
             telegram_request("sendMessage", {
                 "chat_id": chat_id,
-                "text": "Текст сохранён. До авторизации рабочего аккаунта клиентам ничего не отправляется.",
+                "text": "Шаблон сохранён. До авторизации рабочего аккаунта клиентам ничего не отправляется.",
             })
         return
     if text.startswith("/start") and "БЕЗ ТГ" in str(chat.get("title", "")).upper():
@@ -386,7 +403,18 @@ def deliver_outreach_reports() -> int:
     return delivered
 
 
-async def attempt_outreach(phone: str, template_html: str) -> tuple[str, str]:
+def download_bot_photo(file_id: str) -> tuple[io.BytesIO, str]:
+    """Download a saved Bot API photo so the working user account can send it."""
+    result = telegram_request("getFile", {"file_id": file_id})
+    file_path = result["result"]["file_path"]
+    with urllib.request.urlopen(
+        f"https://api.telegram.org/file/bot{BOT_TOKEN}/{file_path}", timeout=35
+    ) as response:
+        content = response.read()
+    return io.BytesIO(content), Path(file_path).name
+
+
+async def attempt_outreach(phone: str, template_html: str, photo_id: str | None = None) -> tuple[str, str]:
     """Return sent, no_tg, retry, or not_authorized plus a human reason."""
     if not (USER_API_ID and USER_API_HASH and USER_PHONE):
         return "not_authorized", "Рабочий Telegram-аккаунт не настроен"
@@ -407,7 +435,13 @@ async def attempt_outreach(phone: str, template_html: str) -> tuple[str, str]:
             return "no_tg", "Пользователь не найден в Telegram"
         user = response.users[0]
         try:
-            await client.send_message(user, template_html, parse_mode="html")
+            if photo_id:
+                photo, filename = download_bot_photo(photo_id)
+                await client.send_file(
+                    user, photo, file_name=filename, caption=template_html, parse_mode="html"
+                )
+            else:
+                await client.send_message(user, template_html, parse_mode="html")
         except (PeerFloodError, FloodWaitError) as error:
             return "retry", f"Telegram ограничил отправку: {error.__class__.__name__}"
         finally:
@@ -426,6 +460,7 @@ def outreach_loop() -> None:
         try:
             deliver_outreach_reports()
             template = get_setting("outreach_template_html")
+            photo_id = get_setting("outreach_template_photo_file_id") or None
             next_allowed = float(get_setting("outreach_next_allowed_at") or "0")
             if not template or time.time() < next_allowed:
                 time.sleep(OUTREACH_POLL_SECONDS)
@@ -442,7 +477,7 @@ def outreach_loop() -> None:
             if not row:
                 time.sleep(OUTREACH_POLL_SECONDS)
                 continue
-            status, reason = asyncio.run(attempt_outreach(row[1], template))
+            status, reason = asyncio.run(attempt_outreach(row[1], template, photo_id))
             if status == "sent":
                 with sqlite3.connect(DATABASE_PATH) as connection:
                     connection.execute(
