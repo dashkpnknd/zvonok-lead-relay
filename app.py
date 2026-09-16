@@ -70,6 +70,8 @@ def init_database() -> None:
             connection.execute("ALTER TABLE leads ADD COLUMN outreach_sent_at TEXT")
         if "report_status" not in columns:
             connection.execute("ALTER TABLE leads ADD COLUMN report_status TEXT")
+        if "outreach_reason" not in columns:
+            connection.execute("ALTER TABLE leads ADD COLUMN outreach_reason TEXT")
         connection.execute(
             """CREATE TABLE IF NOT EXISTS settings (
                    key TEXT PRIMARY KEY, value TEXT NOT NULL)"""
@@ -361,17 +363,21 @@ def route_to_no_tg(event_id: str, phone: str, audio_url: str | None, reason: str
     return True
 
 
-def format_report(number: int, phone: str, event_id: str, status: str) -> str:
+def format_report(number: int, phone: str, event_id: str, status: str, reason: str | None) -> str:
     result = {
         "sent": "Отправлено",
         "routed_no_tg": "Не отправлено → второй чат",
+        "retry_pending": "Не отправлено → повтор через 30 минут",
     }[status]
-    return (
+    report = (
         f"Лид №{number}\n"
         f"Телефон: {html.escape(phone)}\n"
         f"Статус: {result}\n"
         f"ID: <code>{html.escape(event_id)}</code>"
     )
+    if status == "retry_pending" and reason:
+        report += f"\nПричина: {html.escape(reason)}"
+    return report
 
 
 def deliver_outreach_reports() -> int:
@@ -380,18 +386,18 @@ def deliver_outreach_reports() -> int:
         return 0
     with sqlite3.connect(DATABASE_PATH) as connection:
         rows = connection.execute(
-            """SELECT event_id, phone, outreach_status FROM leads
-               WHERE outreach_status IN ('sent', 'routed_no_tg')
+            """SELECT event_id, phone, outreach_status, outreach_reason FROM leads
+               WHERE outreach_status IN ('sent', 'routed_no_tg', 'retry_pending')
                  AND report_status IS NULL
                ORDER BY rowid"""
         ).fetchall()
     delivered = 0
-    for event_id, phone, status in rows:
+    for event_id, phone, status, reason in rows:
         with sqlite3.connect(DATABASE_PATH) as connection:
             number = lead_number(connection, event_id)
         telegram_request("sendMessage", {
             "chat_id": chat_id,
-            "text": format_report(number, phone, event_id, status),
+            "text": format_report(number, phone, event_id, status, reason),
             "parse_mode": "HTML",
         })
         with sqlite3.connect(DATABASE_PATH) as connection:
@@ -401,6 +407,18 @@ def deliver_outreach_reports() -> int:
             )
         delivered += 1
     return delivered
+
+
+def schedule_outreach_retry(event_id: str, reason: str) -> None:
+    """Keep the lead in the queue and make the failed account action visible."""
+    with sqlite3.connect(DATABASE_PATH) as connection:
+        connection.execute(
+            """UPDATE leads
+               SET outreach_status = 'retry_pending', outreach_due_at = ?,
+                   outreach_reason = ?, report_status = NULL
+               WHERE event_id = ?""",
+            (time.time() + OUTREACH_RETRY_DELAY_SECONDS, reason, event_id),
+        )
 
 
 def download_bot_photo(file_id: str) -> tuple[io.BytesIO, str]:
@@ -457,6 +475,7 @@ async def attempt_outreach(phone: str, template_html: str, photo_id: str | None 
 
 def outreach_loop() -> None:
     while True:
+        row: tuple[str, str, str | None, float | None] | None = None
         try:
             deliver_outreach_reports()
             template = get_setting("outreach_template_html")
@@ -466,14 +485,17 @@ def outreach_loop() -> None:
                 time.sleep(OUTREACH_POLL_SECONDS)
                 continue
             with sqlite3.connect(DATABASE_PATH) as connection:
+                # Do not let random initial delays change the order of leads.
+                # The first pending lead is always handled before the next one.
                 row = connection.execute(
-                    """SELECT event_id, phone, audio_url FROM leads
-                       WHERE outreach_status = 'pending' AND outreach_due_at <= ?
-                       ORDER BY outreach_due_at LIMIT 1""",
-                    (time.time(),),
+                    """SELECT event_id, phone, audio_url, outreach_due_at FROM leads
+                       WHERE outreach_status IN ('pending', 'retry_pending')
+                       ORDER BY rowid LIMIT 1"""
                 ).fetchone()
-                if row:
+                if row and (row[3] or 0) <= time.time():
                     connection.execute("UPDATE leads SET outreach_status = 'processing' WHERE event_id = ?", (row[0],))
+                elif row:
+                    row = None
             if not row:
                 time.sleep(OUTREACH_POLL_SECONDS)
                 continue
@@ -481,22 +503,24 @@ def outreach_loop() -> None:
             if status == "sent":
                 with sqlite3.connect(DATABASE_PATH) as connection:
                     connection.execute(
-                        "UPDATE leads SET outreach_status = 'sent', outreach_sent_at = ? WHERE event_id = ?",
+                        """UPDATE leads SET outreach_status = 'sent', outreach_sent_at = ?,
+                           outreach_reason = NULL WHERE event_id = ?""",
                         (datetime.now(timezone.utc).isoformat(), row[0]),
                     )
                 set_setting("outreach_next_allowed_at", str(time.time() + random.randint(*OUTREACH_BETWEEN_DELAY_RANGE)))
-            elif status == "no_tg" and route_to_no_tg(*row, reason):
-                with sqlite3.connect(DATABASE_PATH) as connection:
-                    connection.execute("UPDATE leads SET outreach_status = 'routed_no_tg' WHERE event_id = ?", (row[0],))
-                set_setting("outreach_next_allowed_at", str(time.time() + random.randint(*OUTREACH_BETWEEN_DELAY_RANGE)))
-            else:
+            elif status == "no_tg" and route_to_no_tg(row[0], row[1], row[2], reason):
                 with sqlite3.connect(DATABASE_PATH) as connection:
                     connection.execute(
-                        "UPDATE leads SET outreach_status = 'pending', outreach_due_at = ? WHERE event_id = ?",
-                        (time.time() + OUTREACH_RETRY_DELAY_SECONDS, row[0]),
+                        "UPDATE leads SET outreach_status = 'routed_no_tg', outreach_reason = ? WHERE event_id = ?",
+                        (reason, row[0]),
                     )
+                set_setting("outreach_next_allowed_at", str(time.time() + random.randint(*OUTREACH_BETWEEN_DELAY_RANGE)))
+            else:
+                schedule_outreach_retry(row[0], reason)
         except Exception as error:
             print(f"outreach failed: {error}", flush=True)
+            if row:
+                schedule_outreach_retry(row[0], f"Ошибка аккаунта: {error.__class__.__name__}")
         time.sleep(OUTREACH_POLL_SECONDS)
 
 
