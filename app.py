@@ -453,7 +453,12 @@ def download_bot_photo(file_id: str) -> tuple[io.BytesIO, str]:
         f"https://api.telegram.org/file/bot{BOT_TOKEN}/{file_path}", timeout=35
     ) as response:
         content = response.read()
-    return io.BytesIO(content), Path(file_path).name
+    # Telethon decides whether an uploaded stream is a photo from its
+    # ``.name`` extension. A bare BytesIO has no name, so it is otherwise
+    # uploaded as an application/octet-stream document instead of a photo.
+    photo = io.BytesIO(content)
+    photo.name = Path(file_path).name  # type: ignore[attr-defined]
+    return photo, photo.name
 
 
 async def attempt_outreach(phone: str, template_html: str, photo_id: str | None = None) -> tuple[str, str]:
@@ -478,9 +483,13 @@ async def attempt_outreach(phone: str, template_html: str, photo_id: str | None 
         user = response.users[0]
         try:
             if photo_id:
-                photo, filename = download_bot_photo(photo_id)
+                photo, _filename = download_bot_photo(photo_id)
                 await client.send_file(
-                    user, photo, file_name=filename, caption=template_html, parse_mode="html"
+                    user,
+                    photo,
+                    caption=template_html,
+                    parse_mode="html",
+                    force_document=False,
                 )
             else:
                 await client.send_message(user, template_html, parse_mode="html")

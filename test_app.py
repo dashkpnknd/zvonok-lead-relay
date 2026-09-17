@@ -1,6 +1,8 @@
+import io
 import unittest
+from unittest.mock import patch
 
-from app import format_lead, format_report, message_to_html, parse_lead
+from app import download_bot_photo, format_lead, format_report, message_to_html, parse_lead
 
 
 class ParseLeadTests(unittest.TestCase):
@@ -49,13 +51,25 @@ class ParseLeadTests(unittest.TestCase):
 
     def test_formats_short_outreach_report(self):
         self.assertEqual(
-            format_report(4, "+79990000000", "123", "sent"),
-            "Лид №4\nТелефон: +79990000000\nСтатус: Отправлено\nID: <code>123</code>",
+            format_report(4, "+79990000000", "123", "sent", None, "Очередь: нет"),
+            "Лид №4\nТелефон: +79990000000\nСтатус: Отправлено\nID: <code>123</code>\nОчередь: нет",
         )
         self.assertEqual(
-            format_report(4, "+79990000000", "123", "routed_no_tg"),
-            "Лид №4\nТелефон: +79990000000\nСтатус: Не отправлено → второй чат\nID: <code>123</code>",
+            format_report(4, "+79990000000", "123", "routed_no_tg", None, "Очередь: нет"),
+            "Лид №4\nТелефон: +79990000000\nСтатус: Не отправлено → второй чат\nID: <code>123</code>\nОчередь: нет",
         )
+
+    @patch("app.urllib.request.urlopen")
+    @patch("app.telegram_request", return_value={"result": {"file_path": "photos/image.jpg"}})
+    def test_downloaded_photo_keeps_jpeg_filename_for_telethon(self, _request, urlopen):
+        response = urlopen.return_value.__enter__.return_value
+        response.read.return_value = b"jpeg-bytes"
+
+        photo, filename = download_bot_photo("photo-id")
+
+        self.assertIsInstance(photo, io.BytesIO)
+        self.assertEqual(filename, "image.jpg")
+        self.assertEqual(photo.name, "image.jpg")
 
 
 if __name__ == "__main__":
