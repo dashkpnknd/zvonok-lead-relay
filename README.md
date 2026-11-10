@@ -68,3 +68,7 @@ sudo systemctl enable --now zvonok-lead-relay
 ```
 
 Put a reverse proxy with a valid TLS certificate in front of port 8080 before adding the Zvonok webhook URL.
+
+## Связи и границы проекта
+
+Этот сервис принимает лиды из вебхука Zvonok и отправляет карточки в Telegram. Он не обрабатывает заявки на вступление в каналы (это `tg-auto-approve-bot`) и не является ботом BMI/CallBot.
